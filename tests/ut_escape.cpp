@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 #include <QList>
 #include <QString>
+#include <QUrl>
 
 TEST(ApplicationServiceTest, UnescapeValue_Standard)
 {
@@ -80,6 +81,46 @@ TEST(ApplicationServiceTest, SplitExecArguments_PassPhase2_Spec)
                                        << "\nActual: " << result.value_or(QStringList{}).join("|").toStdString()
                                        << "\nReason: " << tc.reason.toStdString();
     }
+}
+
+TEST(ApplicationServiceTest, ProcessExec_PreservesRawUrlFields)
+{
+    auto ptr = std::make_unique<QFile>(QString{"/tmp/test-url.desktop"});
+    DesktopFile file{std::move(ptr), QString{"test-url"}, 0, 0};
+    std::weak_ptr<ApplicationManager1Storage> storage;
+    ApplicationService app{std::move(file), nullptr, storage};
+
+    const QString customUrl = QStringLiteral("ksowpscloudsvr://start=RelayHttpsServer");
+    auto task = app.processExec(QStringLiteral("wps %u"), QStringList{customUrl}, QString{});
+    ASSERT_TRUE(static_cast<bool>(task));
+    ASSERT_EQ(task.Resources.size(), 1);
+    EXPECT_STREQ(task.Resources.first().typeName(), "QString");
+    EXPECT_EQ(task.Resources.first().toString(), customUrl);
+
+    const QStringList urls{customUrl, QStringLiteral("mailto:user@example.com")};
+    task = app.processExec(QStringLiteral("wps %U"), urls, QString{});
+    ASSERT_TRUE(static_cast<bool>(task));
+    ASSERT_EQ(task.Resources.size(), 1);
+    EXPECT_STREQ(task.Resources.first().typeName(), "QStringList");
+    EXPECT_EQ(task.Resources.first().toStringList(), urls);
+}
+
+TEST(ApplicationServiceTest, ProcessExec_LocalFileFieldsUseQUrl)
+{
+    auto ptr = std::make_unique<QFile>(QString{"/tmp/test-file.desktop"});
+    DesktopFile file{std::move(ptr), QString{"test-file"}, 0, 0};
+    std::weak_ptr<ApplicationManager1Storage> storage;
+    ApplicationService app{std::move(file), nullptr, storage};
+
+    const QString filePath = QStringLiteral("/tmp/a b.txt");
+    const auto task = app.processExec(QStringLiteral("editor %f"), QStringList{filePath}, QString{});
+    ASSERT_TRUE(static_cast<bool>(task));
+    ASSERT_EQ(task.Resources.size(), 1);
+    EXPECT_STREQ(task.Resources.first().typeName(), "QUrl");
+
+    const QUrl url = task.Resources.first().value<QUrl>();
+    EXPECT_TRUE(url.isLocalFile());
+    EXPECT_EQ(url.toLocalFile(), filePath);
 }
 
 TEST(ApplicationServiceTest, EscapeToObjectPath_UTF8ByteSequence)
